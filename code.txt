@@ -1,0 +1,127 @@
+-- Narration
+-- create a function that concatenates first_name and last_name in customers table.
+CREATE OR REPLACE FUNCTION concat_names(first_name VARCHAR(45), last_name VARCHAR(45))
+        RETURNS VARCHAR(90) AS $$
+        SELECT CONCAT(first_name, ' ', last_name);
+        $$ LANGUAGE sql;
+
+-- Narration
+-- create a function that returns the customer table with first_name and last_name concatenated.
+-- This function employs the previously created function to concatenate the customer name
+CREATE OR REPLACE FUNCTION new_customers()
+RETURNS TABLE
+    (
+        customer_id integer,
+        customer_email VARCHAR(50),
+        store_id smallint,
+        cust_address_id smallint,
+        full_name VARCHAR(90),
+        creation_date date,
+        activebool boolean,
+        last_time_updated timestamp without time zone
+    ) AS $$
+    SELECT customer_id, email, store_id, address_id, concat_names(first_name, last_name), create_date, activebool, last_update
+    FROM customer;
+    $$ LANGUAGE sql;
+
+-- Narration
+-- call the function new_customer created above
+SELECT * FROM new_customers();
+
+-- Narration
+-- SQL code to create table to hold detailed info.
+CREATE TABLE detailed_table(
+film_identifier integer, film_title VARCHAR(255), film_category_id integer, film_category_name VARCHAR(25),
+dvd_store_id integer, dvd_rental_amount numeric (4, 2), dvd_rental_id integer, cust_full_name VARCHAR(90)
+);
+
+-- Narration
+-- SQL code to create the table to hold summary information.
+CREATE TABLE summary_table (
+    film_category_id integer, film_category_name VARCHAR(25), dvd_store_id integer, sum_of_amount numeric
+);
+
+-- Narration
+-- Insert data into detailed_table by querying the existing tables in dvdrental db
+INSERT INTO detailed_table(
+    film_identifier, film_title, film_category_id, 
+    film_category_name, dvd_store_id, dvd_rental_amount, dvd_rental_id, cust_full_name
+)
+SELECT flm.film_id, flm.title, ct.category_id, ct.name, str.store_id, pmt.amount, rtl.rental_id, concat_names(cu.first_name, cu.last_name)
+    FROM film flm
+    INNER JOIN film_category fct ON flm.film_id = fct.film_id
+    INNER JOIN category ct ON fct.category_id = ct.category_id
+    INNER JOIN inventory inv ON flm.film_id = inv.film_id
+    INNER JOIN store str ON inv.store_id = str.store_id
+    INNER JOIN rental rtl ON inv.inventory_id = rtl.inventory_id
+    INNER JOIN payment pmt ON rtl.rental_id = pmt.rental_id
+    INNER JOIN customer cu on rtl.customer_id = cu.customer_id;
+
+-- Narration
+-- Insert data into summary_table by querying the detailed_table table we created.
+INSERT INTO summary_table (
+    film_category_id, film_category_name, dvd_store_id, sum_of_amount
+)
+SELECT film_category_id, film_category_name, dvd_store_id, SUM(dvd_rental_amount)
+FROM detailed_table
+GROUP BY film_category_id, film_category_name, dvd_store_id;
+
+-- Narration
+-- SQL code to create a trigger that updates summary_table when new data is inserted in detailed_table
+CREATE OR REPLACE FUNCTION upd_summary_tbl()
+RETURNS TRIGGER AS $$
+    BEGIN
+        IF (TG_OP = 'INSERT') THEN
+        DROP TABLE IF EXISTS summary_table;
+        CREATE TABLE summary_table (
+            film_category_id integer, film_category_name VARCHAR(25), dvd_store_id integer, sum_of_amount numeric
+        );
+        INSERT INTO summary_table (
+            film_category_id, film_category_name, dvd_store_id, sum_of_amount
+        )
+        SELECT film_category_id, film_category_name, dvd_store_id, SUM(dvd_rental_amount)
+        FROM detailed_table
+        GROUP BY film_category_id, film_category_name, dvd_store_id;
+        END IF;
+        RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql;
+CREATE OR REPLACE TRIGGER upd_summary
+    AFTER INSERT 
+    ON public.detailed_table
+    FOR EACH ROW
+    EXECUTE FUNCTION public.upd_summary_tbl();
+
+
+-- Narration
+-- this procedure replaces data in both detailed_table and summary_table tables.
+CREATE OR REPLACE PROCEDURE refresh_tbls()
+LANGUAGE SQL AS $$
+    DELETE FROM detailed_table;
+    DELETE FROM summary_table;
+
+    INSERT INTO detailed_table(
+        film_identifier, film_title, film_category_id, 
+        film_category_name, dvd_store_id, dvd_rental_amount, dvd_rental_id, cust_full_name
+    )
+    SELECT flm.film_id, flm.title, ct.category_id, ct.name, str.store_id, pmt.amount, rtl.rental_id, concat_names(cu.first_name, cu.last_name)
+        FROM film flm
+        INNER JOIN film_category fct ON flm.film_id = fct.film_id
+        INNER JOIN category ct ON fct.category_id = ct.category_id
+        INNER JOIN inventory inv ON flm.film_id = inv.film_id
+        INNER JOIN store str ON inv.store_id = str.store_id
+        INNER JOIN rental rtl ON inv.inventory_id = rtl.inventory_id
+        INNER JOIN payment pmt ON rtl.rental_id = pmt.rental_id
+        INNER JOIN customer cu on rtl.customer_id = cu.customer_id;
+
+    INSERT INTO summary_table (
+        film_category_id, film_category_name, dvd_store_id, sum_of_amount
+    )
+    SELECT film_category_id, film_category_name, dvd_store_id, SUM(dvd_rental_amount)
+    FROM detailed_table
+    GROUP BY film_category_id, film_category_name, dvd_store_id;
+    $$;
+
+-- call the procudeure refresh_tbls()
+CALL refresh_tbls()
+
